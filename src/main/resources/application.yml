@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/ragdb
+    url: jdbc:postgresql://localhost:5432/ragdb?sslmode=disable
     username: postgres
     password: postgres
   ai:
