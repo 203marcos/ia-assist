@@ -87,3 +87,9 @@ Desktop.ini
 *.swo
 *~
 *.tmp
+
+# ==========================
+# Personal / confidential documents
+# (scratch area used to test the /ingest endpoint manually; not meant for the public repo)
+# ==========================
+src/main/resources/docs/

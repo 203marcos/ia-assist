@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.Map;
 
 @RestController
@@ -20,5 +21,11 @@ public class IngestionController {
     @PostMapping(value = "/ingest", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Integer> ingest(@RequestParam("file") MultipartFile file) {
         return Map.of("chunksStored", ingestionService.ingest(file.getResource()));
+    }
+
+    /** Varre works/ inteira e (re)ingere todos os arquivos .md, .txt e .pdf. */
+    @PostMapping("/ingest/works")
+    public Map<String, Integer> ingestWorks() throws IOException {
+        return ingestionService.ingestWorks();
     }
 }

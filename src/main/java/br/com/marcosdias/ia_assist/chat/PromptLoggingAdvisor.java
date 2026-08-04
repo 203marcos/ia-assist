@@ -16,19 +16,20 @@ import org.springframework.ai.chat.model.ChatResponse;
 import reactor.core.publisher.Flux;
 
 /**
- * Loga, em nivel DEBUG, o prompt final enviado ao modelo (bloco de IDA) e a
- * resposta gerada (bloco de VOLTA). O prompt ja contem a mensagem do usuario, o
- * contexto recuperado (RAG) e as ancoras do template (CONTEXTO_INICIO/CONTEXTO_FIM).
+ * Observabilidade do prompt final enviado ao modelo e da resposta gerada.
+ *
+ * Niveis de log:
+ * - DEBUG: resumo compacto por chamada (conversationId, quantidade de mensagens,
+ *   tamanho do prompt e da resposta em caracteres).
+ * - TRACE: alem do resumo, o conteudo completo do prompt e da resposta.
  *
  * Por usar order maior que o do QuestionAnswerAdvisor (0), o prompt e visto
- * DEPOIS da augmentacao, completo. No modo stream, a resposta e agregada token a
- * token e logada uma unica vez, ja completa.
+ * DEPOIS da augmentacao RAG, completo. No modo stream, a resposta e agregada
+ * token a token e logada uma unica vez, ja completa.
  */
 public class PromptLoggingAdvisor implements BaseAdvisor {
 
     private static final Logger logger = LoggerFactory.getLogger(PromptLoggingAdvisor.class);
-
-    private static final String BORDER = "═".repeat(70);
 
     private final int order;
 
@@ -73,13 +74,23 @@ public class PromptLoggingAdvisor implements BaseAdvisor {
             return;
         }
         Object conversationId = request.context().get(ChatMemory.CONVERSATION_ID);
-        StringBuilder prompt = new StringBuilder();
-        for (Message message : request.prompt().getInstructions()) {
-            prompt.append("\n┌── ").append(message.getMessageType()).append(" ──\n");
-            prompt.append(message.getText());
+        var messages = request.prompt().getInstructions();
+        int totalChars = messages.stream()
+                .mapToInt(m -> m.getText() == null ? 0 : m.getText().length())
+                .sum();
+        logger.debug("[conversationId={}] Prompt enviado ao modelo: {} mensagens, {} caracteres",
+                conversationId, messages.size(), totalChars);
+
+        if (logger.isTraceEnabled()) {
+            StringBuilder prompt = new StringBuilder();
+            for (Message message : messages) {
+                prompt.append(System.lineSeparator())
+                        .append("--- ").append(message.getMessageType()).append(" ---")
+                        .append(System.lineSeparator())
+                        .append(message.getText());
+            }
+            logger.trace("[conversationId={}] Conteudo completo do prompt:{}", conversationId, prompt);
         }
-        logger.debug("\n📤 {}\n📤 IDA — Prompt enviado ao modelo [conversationId={}]\n📤 {}{}\n📤 {}",
-                BORDER, conversationId, BORDER, prompt, BORDER);
     }
 
     private void logResponse(ChatClientRequest request, ChatClientResponse response) {
@@ -88,8 +99,13 @@ public class PromptLoggingAdvisor implements BaseAdvisor {
         }
         Object conversationId = request.context().get(ChatMemory.CONVERSATION_ID);
         String answer = extractText(response);
-        logger.debug("\n📥 {}\n📥 VOLTA — Resposta gerada pelo modelo [conversationId={}]\n📥 {}\n{}\n📥 {}",
-                BORDER, conversationId, BORDER, answer, BORDER);
+        logger.debug("[conversationId={}] Resposta recebida do modelo: {} caracteres",
+                conversationId, answer.length());
+
+        if (logger.isTraceEnabled()) {
+            logger.trace("[conversationId={}] Conteudo completo da resposta:{}{}",
+                    conversationId, System.lineSeparator(), answer);
+        }
     }
 
     private String extractText(ChatClientResponse response) {

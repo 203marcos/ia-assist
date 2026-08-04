@@ -20,12 +20,20 @@ spring:
 # bloco proprio do projeto (nao e do framework)
 app:
   rag:
-    top-k: 5                           # quantos chunks o QuestionAnswerAdvisor recupera
-    similarity-threshold: 0.4          # piso de similaridade do retrieval
+    top-k: 4                           # quantos chunks o QuestionAnswerAdvisor recupera
+    similarity-threshold: 0.5          # piso de similaridade do retrieval
   memory:
     max-messages: 20                   # tamanho da janela do MessageWindowChatMemory
+  works:
+    dir: src/main/resources/works      # repositorio de estudos (relativo a raiz do projeto)
 
-# nivel DEBUG so para o advisor de observabilidade (PromptLoggingAdvisor)
 logging:
   level:
-    br.com.devsuperior.hr_assistant.chat.PromptLoggingAdvisor: DEBUG
+    # o MessageAggregator reloga erros que o AnthropicChatModel e o ChatService
+    # ja reportam com stack trace; desligado para evitar o mesmo erro repetido
+    org.springframework.ai.chat.model.MessageAggregator: "OFF"
+    # observabilidade do prompt (PromptLoggingAdvisor):
+    #   INFO  -> silencioso (padrao)
+    #   DEBUG -> resumo por chamada (conversationId, mensagens, tamanhos)
+    #   TRACE -> conteudo completo do prompt e da resposta
+    br.com.marcosdias.ia_assist.chat.PromptLoggingAdvisor: INFO
