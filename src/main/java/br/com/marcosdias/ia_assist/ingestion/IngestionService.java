@@ -63,7 +63,8 @@ public class IngestionService {
         return result;
     }
 
-    private int ingestWorksFile(Path file) {
+    /** Ingestao de um unico arquivo de works/, usada tanto pelo scan completo quanto por gravacoes pontuais. */
+    public int ingestWorksFile(Path file) {
         String source = relativeSource(file);
         String tipo = source.contains("/") ? source.substring(0, source.indexOf('/')) : "raiz";
 

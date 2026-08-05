@@ -1,9 +1,13 @@
 package br.com.marcosdias.ia_assist.works;
 
+import br.com.marcosdias.ia_assist.ingestion.IngestionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -12,8 +16,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -29,11 +35,18 @@ public class WorksTools {
 
     private static final long MAX_FILE_BYTES = 512 * 1024; // limite de leitura por arquivo
     private static final List<String> TEXT_EXTENSIONS = List.of(".md", ".txt");
+    private static final int SEMANTIC_TOP_K = 5;
+    private static final double SEMANTIC_THRESHOLD = 0.5;
 
     private final Path baseDir;
+    private final VectorStore vectorStore;
+    private final IngestionService ingestionService;
 
-    public WorksTools(@Value("${app.works.dir}") String worksDir) throws IOException {
+    public WorksTools(@Value("${app.works.dir}") String worksDir, VectorStore vectorStore,
+            IngestionService ingestionService) throws IOException {
         this.baseDir = Path.of(worksDir).toAbsolutePath().normalize();
+        this.vectorStore = vectorStore;
+        this.ingestionService = ingestionService;
         Files.createDirectories(baseDir);
     }
 
@@ -83,9 +96,10 @@ public class WorksTools {
     }
 
     @Tool(description = """
-            Busca um termo (sem diferenciar maiusculas) nos nomes de pastas/arquivos e no conteudo
-            dos arquivos .md/.txt de works/. Use para verificar se um conteudo equivalente ja existe
-            antes de criar um novo. Retorna os caminhos encontrados.""")
+            Busca um termo nos nomes de pastas/arquivos, no conteudo literal dos arquivos .md/.txt
+            de works/ e tambem por similaridade semantica no vector store (encontra conteudo sobre
+            o mesmo assunto mesmo com palavras diferentes). Use SEMPRE para verificar se um conteudo
+            equivalente ja existe antes de criar um novo. Retorna os caminhos encontrados.""")
     public String buscarConteudos(
             @ToolParam(description = "Termo a buscar, ex.: 'Kafka', 'ECS', 'OAuth2'") String termo) {
         String needle = termo.toLowerCase(Locale.ROOT).trim();
@@ -115,7 +129,12 @@ public class WorksTools {
             logger.error("Falha ao buscar '{}' em works/", termo, e);
             return "Erro na busca: " + e.getMessage();
         }
-        if (nameMatches.isEmpty() && contentMatches.isEmpty()) {
+        Set<String> semanticMatches = buscarPorSimilaridade(termo);
+        // um resultado semantico que ja apareceu na busca literal nao precisa ser repetido
+        semanticMatches.removeAll(nameMatches);
+        semanticMatches.removeAll(contentMatches);
+
+        if (nameMatches.isEmpty() && contentMatches.isEmpty() && semanticMatches.isEmpty()) {
             return "Nenhum resultado para '" + termo + "' em works/.";
         }
         StringBuilder sb = new StringBuilder();
@@ -130,7 +149,36 @@ public class WorksTools {
             sb.append("Encontrado dentro do conteudo de:\n")
                     .append(String.join("\n", contentMatches));
         }
+        if (!semanticMatches.isEmpty()) {
+            if (!sb.isEmpty()) {
+                sb.append("\n\n");
+            }
+            sb.append("Encontrado por similaridade semantica (mesmo assunto, palavras diferentes):\n")
+                    .append(String.join("\n", semanticMatches));
+        }
         return sb.toString();
+    }
+
+    /** Busca por similaridade no vector store, restrita aos documentos ja ingeridos de works/. */
+    private Set<String> buscarPorSimilaridade(String termo) {
+        try {
+            List<Document> results = vectorStore.similaritySearch(SearchRequest.builder()
+                    .query(termo)
+                    .topK(SEMANTIC_TOP_K)
+                    .similarityThreshold(SEMANTIC_THRESHOLD)
+                    .build());
+            Set<String> sources = new LinkedHashSet<>();
+            for (Document doc : results) {
+                Object source = doc.getMetadata().get("source");
+                if (source != null) {
+                    sources.add(source.toString());
+                }
+            }
+            return sources;
+        } catch (RuntimeException e) {
+            logger.warn("Falha na busca semantica por '{}', seguindo so com a busca literal", termo, e);
+            return Set.of();
+        }
     }
 
     @Tool(description = """
@@ -151,7 +199,11 @@ public class WorksTools {
             Files.writeString(file, conteudo, StandardCharsets.UTF_8);
             String action = existed ? "atualizado" : "criado";
             logger.info("Arquivo {} em works/: {}", action, caminho);
-            return "Arquivo " + action + ": " + toRelative(file);
+
+            // reingere na hora: o arquivo fica buscavel por RAG e por buscarConteudos
+            // imediatamente, sem depender de uma chamada separada a /ingest/works.
+            int chunks = ingestionService.ingestWorksFile(file);
+            return "Arquivo " + action + ": " + toRelative(file) + " (" + chunks + " chunks indexados)";
         } catch (IllegalArgumentException e) {
             return e.getMessage();
         } catch (IOException e) {
