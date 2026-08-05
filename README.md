@@ -25,6 +25,17 @@ Each request goes through a small advisor pipeline:
 
 On top of that, the chat model has access to **tools** (`WorksTools`) that let it browse, read, search and create/update files inside the knowledge base directly — all paths are resolved and sandboxed relative to `works/`. When running with the `anthropic` profile, Anthropic prompt caching is enabled for the system prompt, tools and conversation history to cut latency and cost on multi-turn conversations.
 
+## Why token usage can spike
+
+Simple Q&A over the chat is cheap: one RAG lookup, one model call, prompt caching covers the repeated system prompt/tools/history on every follow-up. Cost spikes when the model is asked to process something new (e.g. "analyze this job posting and update my study plan"), for a few compounding reasons:
+
+- **Duplicate-checking isn't the same search as RAG.** The `QuestionAnswerAdvisor` does a real vector similarity search, but only once, against the user's original message. Mid-task, the system prompt instructs the model to avoid duplicate content by calling `buscarConteudos` — which is a plain case-insensitive substring match over file names and contents, not a semantic search. If existing notes use different wording than the model's search term, the check misses them, the model concludes nothing exists yet, and writes a brand-new file instead of reusing what's already there.
+- **Freshly written files aren't retrievable until re-ingested.** `criarOuAtualizarArquivo` writes straight to disk; it doesn't call the ingestion pipeline. So even within the same session, content the model just created isn't in the vector store yet and can't ground a later RAG lookup — only `/ingest/works` (run separately) makes it searchable again.
+- **Every tool round-trip resends the whole context.** Claude's API is stateless: each tool call/result is a new request carrying the full system prompt, tool schemas and conversation so far. Prompt caching discounts the *repeated prefix* (~90% off on a hit), but each new turn still adds fresh, uncached tokens and triggers another cache write — so a task that chains many tool calls (list → search → read → write, repeated per topic) multiplies cost with every step.
+- **Generation is output-heavy, and output is the expensive side.** When the model does create new content, the system prompt caps each file at ~120 lines but still asks for a fairly complete write-up (concepts, example, pitfalls, interview questions, links) — and a single job-posting analysis can produce several such files (`vaga.md`, `plano-estudo.md`, plus any missing `conteudos/*` entries) in one go. Output tokens are priced several times higher than input tokens on Claude, so this is where a lot of the spend concentrates.
+
+In short: the app is well-grounded for read-only Q&A, but the *write* path relies on a keyword-based duplicate check rather than the same embeddings used for retrieval, so it doesn't always "see" that equivalent content already exists — and when it doesn't, it pays for a full new generation instead of a cheap reuse. Making `buscarConteudos` route through the vector store (or re-ingesting after every write) would close that gap.
+
 ## Prerequisites
 
 - JDK 25 on your `PATH`
